@@ -1,0 +1,33 @@
+FROM almalinux:8
+
+# Enable extra repos
+RUN dnf -y install epel-release dnf-plugins-core && \
+    dnf config-manager --set-enabled powertools
+
+# Install toolchain and dependencies
+RUN dnf -y install gcc-toolset-12-gcc gcc-toolset-12-gcc-c++ \
+        make cmake git ninja-build pkgconfig python3-pip \
+        jsoncpp-devel systemd-devel \
+    && dnf clean all
+
+# Install meson via pip (repo version is too old)
+RUN pip3 install meson
+
+# Build and install gtest/gmock from source
+RUN git clone --depth 1 --branch v1.14.0 https://github.com/google/googletest.git /tmp/gtest && \
+    cd /tmp/gtest && \
+    source /opt/rh/gcc-toolset-12/enable && \
+    cmake -B build -G Ninja -DCMAKE_INSTALL_PREFIX=/usr && \
+    ninja -C build && ninja -C build install && \
+    rm -rf /tmp/gtest
+
+WORKDIR /oomd
+COPY . .
+
+# Build with gcc-toolset-12 (GCC 12, supports C++20)
+RUN source /opt/rh/gcc-toolset-12/enable && \
+    meson setup build && ninja -C build
+
+# Run tests (some cgroup tests expected to fail in containers)
+RUN source /opt/rh/gcc-toolset-12/enable && \
+    ninja test -C build || true

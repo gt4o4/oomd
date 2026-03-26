@@ -44,6 +44,10 @@
 #include "oomd/util/ScopeGuard.h"
 #include "oomd/util/Util.h"
 
+#ifndef SYS_pidfd_open
+#define SYS_pidfd_open 434
+#endif
+
 #ifndef __NR_process_mrelease
 #define __NR_process_mrelease 448
 #endif

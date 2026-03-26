@@ -23,6 +23,7 @@
 #include <unistd.h>
 #include <iostream>
 #include <optional>
+#include <sstream>
 #include <vector>
 #include "oomd/util/ScopeGuard.h"
 #include "oomd/util/Util.h"
