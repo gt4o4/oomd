@@ -6,7 +6,9 @@ After=system.slice
 ExecStart=@bindir@/oomd --interval 1 --config @oomdconfdir@/oomd.json
 Restart=always
 SyslogIdentifier=oomd
+MemoryMin=64M
 MemoryLow=64M
+OOMScoreAdjust=-900
 
 [Install]
 WantedBy=multi-user.target
