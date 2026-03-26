@@ -1,0 +1,40 @@
+FROM registry.fedoraproject.org/fedora:latest
+
+# Install RPM build tools and oomd build dependencies
+RUN dnf -y install \
+    rpm-build \
+    rpmdevtools \
+    meson \
+    gcc-c++ \
+    jsoncpp-devel \
+    systemd-devel \
+    gmock-devel \
+    gtest-devel \
+    systemd-rpm-macros \
+    && dnf clean all
+
+# Create rpmbuild user
+RUN useradd -m builder
+USER builder
+WORKDIR /home/builder
+
+# Set up RPM build tree
+RUN rpmdev-setuptree
+
+# Copy spec and patches
+COPY --chown=builder:builder rpm/oomd.spec /home/builder/rpmbuild/SPECS/
+COPY --chown=builder:builder rpm/oomd-disable-datalifecycle-children-test.patch /home/builder/rpmbuild/SOURCES/
+
+# Copy the full source tree and create tarball
+COPY --chown=builder:builder . /home/builder/oomd-src
+
+RUN cd /home/builder/oomd-src && \
+    SPEC_VERSION=$(grep '^Version:' /home/builder/rpmbuild/SPECS/oomd.spec | awk '{print $2}') && \
+    mkdir -p /home/builder/rpmbuild/SOURCES && \
+    tar czf /home/builder/rpmbuild/SOURCES/oomd-${SPEC_VERSION}.tar.gz \
+        --transform "s,^,oomd-${SPEC_VERSION}/," \
+        --exclude='.git' --exclude='rpm/Dockerfile.build' \
+        .
+
+# Build the RPM (without tests for Docker environment - no cgroups)
+RUN rpmbuild -ba /home/builder/rpmbuild/SPECS/oomd.spec --without tests

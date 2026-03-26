@@ -1,0 +1,73 @@
+FROM almalinux:8
+
+# Enable extra repos
+RUN dnf -y install epel-release dnf-plugins-core && \
+    dnf config-manager --set-enabled powertools
+
+# Install RPM build tools, toolchain, and oomd build dependencies
+RUN dnf -y install \
+    rpm-build \
+    rpmdevtools \
+    gcc-c++ \
+    meson \
+    gcc-toolset-12-gcc gcc-toolset-12-gcc-c++ \
+    gcc-toolset-12-annobin-plugin-gcc \
+    gcc-toolset-12-gcc-plugin-annobin \
+    make cmake git ninja-build pkgconfig python3-pip \
+    jsoncpp-devel systemd-devel \
+    systemd-rpm-macros \
+    redhat-rpm-config \
+    && dnf clean all
+
+# Upgrade meson via pip (repo version may be too old)
+RUN pip3 install --upgrade meson
+
+# Make gcc-toolset-12 the default compiler system-wide via ENV
+ENV PATH="/opt/rh/gcc-toolset-12/root/usr/bin:${PATH}" \
+    LD_LIBRARY_PATH="/opt/rh/gcc-toolset-12/root/usr/lib64:/opt/rh/gcc-toolset-12/root/usr/lib" \
+    PKG_CONFIG_PATH="/opt/rh/gcc-toolset-12/root/usr/lib64/pkgconfig"
+
+# Fix annobin spec: rpmbuild injects -specs=.../redhat-annobin-cc1 which
+# references the system gcc's annobin plugin, but we use gcc-toolset-12.
+# Copy the gcc-toolset-12 annobin spec to where rpmbuild expects it.
+RUN cp /opt/rh/gcc-toolset-12/root/usr/lib/rpm/redhat/redhat-annobin-cc1 \
+       /usr/lib/rpm/redhat/redhat-annobin-cc1 2>/dev/null || \
+    echo '%__global_compiler_flags -O2 -g -pipe -Wall -Werror=format-security -Wp,-D_FORTIFY_SOURCE=2 -Wp,-D_GLIBCXX_ASSERTIONS -fexceptions -fstack-protector-strong -grecord-gcc-switches -specs=/usr/lib/rpm/redhat/redhat-hardened-cc1 -m64 -mtune=generic -fasynchronous-unwind-tables -fstack-clash-protection -fcf-protection' > /etc/rpm/macros.annobin-workaround
+
+# Build and install gtest/gmock from source (not packaged for EL8)
+RUN git clone --depth 1 --branch v1.14.0 https://github.com/google/googletest.git /tmp/gtest && \
+    cd /tmp/gtest && \
+    cmake -B build -G Ninja -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_POSITION_INDEPENDENT_CODE=ON && \
+    ninja -C build && ninja -C build install && \
+    rm -rf /tmp/gtest
+
+# Verify compiler and annobin setup
+RUN gcc --version | head -1 && \
+    echo "annobin spec:" && \
+    find / -name 'redhat-annobin-cc1' -type f 2>/dev/null
+
+# Create rpmbuild user
+RUN useradd -m builder
+USER builder
+WORKDIR /home/builder
+
+# Set up RPM build tree
+RUN rpmdev-setuptree
+
+# Copy spec and patches
+COPY --chown=builder:builder rpm/oomd.spec /home/builder/rpmbuild/SPECS/
+COPY --chown=builder:builder rpm/oomd-disable-datalifecycle-children-test.patch /home/builder/rpmbuild/SOURCES/
+
+# Copy the full source tree and create tarball
+COPY --chown=builder:builder . /home/builder/oomd-src
+
+RUN cd /home/builder/oomd-src && \
+    SPEC_VERSION=$(grep '^Version:' /home/builder/rpmbuild/SPECS/oomd.spec | awk '{print $2}') && \
+    mkdir -p /home/builder/rpmbuild/SOURCES && \
+    tar czf /home/builder/rpmbuild/SOURCES/oomd-${SPEC_VERSION}.tar.gz \
+        --transform "s,^,oomd-${SPEC_VERSION}/," \
+        --exclude='.git' --exclude='rpm/Dockerfile.*' \
+        .
+
+# Build the RPM (without tests - no cgroups in Docker containers)
+RUN rpmbuild -ba /home/builder/rpmbuild/SPECS/oomd.spec --without tests
